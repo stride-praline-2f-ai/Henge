@@ -4,29 +4,6 @@ import UIKit
 /// The Desk: a quiet page, cards on it with a hairline edge, and one blue for what you press.
 /// A Mac's screen is the only colourful thing here. Dark, or light (Settings › Appearance);
 /// a running Mac's session is always dark.
-enum Desk {
-    static let page = tone(light: (242, 243, 247), dark: (11, 12, 16))
-    static let card = tone(light: (255, 255, 255), dark: (22, 24, 31))
-    static let raised = tone(light: (228, 230, 236), dark: (35, 38, 47))
-    static let text = tone(light: (17, 19, 24), dark: (242, 243, 247))
-    static let dim = tone(light: (92, 97, 112), dark: (144, 149, 164))
-    static let faint = tone(light: (138, 143, 157), dark: (106, 111, 126))
-    static let accent = Color(red: 46 / 255, green: 107 / 255, blue: 1)
-    /// Blue for tints and text: lighter on the dark page, deeper on the light one.
-    static let accentLight = tone(light: (31, 91, 235), dark: (91, 141, 255))
-    static let good = tone(light: (20, 145, 90), dark: (57, 217, 138))
-    static let warn = tone(light: (184, 119, 0), dark: (255, 188, 46))
-    static let bad = tone(light: (210, 56, 43), dark: (255, 122, 112))
-    static let hairline = Color(UIColor { $0.userInterfaceStyle == .dark ? UIColor(white: 1, alpha: 0.1) : UIColor(white: 0, alpha: 0.1) })
-
-    private static func tone(light: (Int, Int, Int), dark: (Int, Int, Int)) -> Color {
-        func ui(_ c: (Int, Int, Int)) -> UIColor {
-            UIColor(red: CGFloat(c.0) / 255, green: CGFloat(c.1) / 255, blue: CGFloat(c.2) / 255, alpha: 1)
-        }
-        let l = ui(light), d = ui(dark)
-        return Color(UIColor { $0.userInterfaceStyle == .dark ? d : l })
-    }
-}
 
 /// Settings › Appearance.
 enum DeskAppearance: String, CaseIterable, Identifiable {
@@ -146,6 +123,8 @@ struct DeskBar: View {
 
 /// The picture of a Mac as it was last seen, kept beside its disk.
 enum MacPreview {
+    private static let writes = PreviewWorkQueue()
+    static func beginSession() { writes.beginSession() }
     static func file(for mac: VirtualMac) -> URL { mac.directory.appendingPathComponent("preview.jpg") }
 
     static func capture(width: Int, height: Int) -> CGImage? {
@@ -159,17 +138,23 @@ enum MacPreview {
     }
 
     /// Off the main thread.
-    static func save(for mac: VirtualMac) {
-        let url = file(for: mac), height = Int(640 / mac.aspect)
-        Task.detached(priority: .utility) { write(to: url, height: height) }
+    static func save(for mac: VirtualMac, aspect: CGFloat? = nil) {
+        let url = file(for: mac), height = Int(640 / (aspect ?? mac.aspect))
+        writes.save(path: url.path, frame: { henge_vm_gpu_frames() }) {
+            write(to: url, height: height)
+        }
     }
 
     /// Before the machine stops, while there is still a screen to read.
-    static func saveNow(for mac: VirtualMac) { write(to: file(for: mac), height: Int(640 / mac.aspect)) }
+    static func saveNow(for mac: VirtualMac, aspect: CGFloat? = nil) {
+        let url = file(for: mac), height = Int(640 / (aspect ?? mac.aspect))
+        writes.finish { write(to: url, height: height) }
+    }
 
-    private static func write(to url: URL, height: Int) {
-        guard let image = capture(width: 640, height: height), let data = UIImage(cgImage: image).jpegData(compressionQuality: 0.8) else { return }
-        try? data.write(to: url, options: .atomic)
+    private static func write(to url: URL, height: Int) -> Bool {
+        guard let image = capture(width: 640, height: height), let data = UIImage(cgImage: image).jpegData(compressionQuality: 0.8) else { return false }
+        do { try data.write(to: url, options: .atomic); return true }
+        catch { return false }
     }
 }
 

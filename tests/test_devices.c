@@ -1,11 +1,12 @@
 #include "harness.h"
 
-#include <fcntl.h>
+#include <limits.h>
 #include <stdlib.h>
 #include <time.h>
 #include <unistd.h>
 
 #include "sysreg.h"
+#include "timer.h"
 #include "vmapple.h"
 
 DECLARE_PROGRAM(p_timer_irq);
@@ -20,6 +21,7 @@ static const char *work_dir(void) {
     return w && *w ? w : "/tmp";
 }
 #define RAM_SIZE (384ull << 20)
+
 
 static HvMachine m;
 static HvCpu cpu;
@@ -68,6 +70,43 @@ static void test_gic(void) {
     check("GICR_WAKER awake", rd32(VMAPPLE_GIC_REDIST + 0x14), 0);
     m.icc_write(&m, &cpu, ICC_PMR, 0xff);
     m.icc_write(&m, &cpu, ICC_IGRPEN1, 1);
+
+    /* Generic timer PPIs: one sampled update, banked arbitration only. */
+    g->cpu[0].enabled[27] = g->cpu[0].enabled[30] = 1;
+    g->cpu[0].group[27] = g->cpu[0].group[30] = 1;
+    g->cpu[0].priority[27] = 0x40; g->cpu[0].priority[30] = 0x60;
+    for (int v = 0; v < 2; v++) for (int p = 0; p < 2; p++) {
+        hv_gicv3_set_timer_lines(g, 0, v, p);
+        check("timer pair virtual level", g->cpu[0].level[27], v);
+        check("timer pair physical level", g->cpu[0].level[30], p);
+        check("timer pair IRQ arbitration", m.percpu[0].irq_line, v || p);
+        hv_gicv3_set_timer_lines(g, 0, v, p);
+        check("timer pair repeat stable", m.percpu[0].irq_line, v || p);
+    }
+    hv_gicv3_set_timer_lines(g, 0, 0, 0);
+    int saved_ncpus = m.ncpus;
+    m.ncpus = 2;
+    g->cpu[1].waker = 0; g->cpu[1].pmr = 255; g->cpu[1].igrpen1 = 1;
+    g->enabled[33] = g->group[33] = g->level[33] = 1;
+    g->priority[33] = 0x80; g->route[33] = 1;
+    g->spi_on[33 / 64] |= 1ull << (33 % 64);
+    hv_gicv3_update(g);
+    check("second CPU routed SPI raised", m.percpu[1].irq_line, 1);
+    hv_gicv3_set_timer_lines(g, 0, 1, 1);
+    check("banked timer preserves other CPU SPI", m.percpu[1].irq_line, 1);
+    check("banked timer raises local IRQ", m.percpu[0].irq_line, 1);
+    hv_gicv3_set_timer_lines(g, 0, 0, 0);
+    check("banked timer lowers local IRQ", m.percpu[0].irq_line, 0);
+    check("banked timer lowering preserves other CPU", m.percpu[1].irq_line, 1);
+    g->enabled[33] = g->level[33] = 0; g->route[33] = 0;
+    hv_gicv3_update(g); m.ncpus = saved_ncpus;
+    g->cpu[0].edge[27] = 1;
+    hv_gicv3_set_timer_lines(g, 0, 1, 0);
+    hv_gicv3_set_timer_lines(g, 0, 0, 0);
+    check("timer pair preserves rising-edge latch", g->cpu[0].latch[27], 1);
+    g->cpu[0].latch[27] = g->cpu[0].edge[27] = 0;
+    g->cpu[0].enabled[27] = g->cpu[0].enabled[30] = 0;
+    hv_gicv3_update(g);
 
     /* SPI 33 (UART), level, group 1, priority 0x80 */
     wr32(VMAPPLE_GIC_DIST + 0x84, 1u << 1);
@@ -120,16 +159,35 @@ static void test_gic(void) {
     check("ICENABLER1 clears", (wr32(VMAPPLE_GIC_DIST + 0x184, 6), rd32(VMAPPLE_GIC_DIST + 0x104) & 6), 0);
 }
 
-static int make_disk(const char *path, uint64_t size, uint8_t salt) {
-    int fd = open(path, O_RDWR | O_CREAT | O_TRUNC, 0644);
-    if (fd < 0) return -1;
+static int make_disk(HvDisk *disk, uint64_t size, uint64_t offset, uint8_t salt) {
+    const char *tmp = work_dir();
+    if (!tmp || !*tmp) tmp = "/tmp";
+    char path[PATH_MAX];
+    if (snprintf(path, sizeof path, "%s/henge-test-disk.XXXXXX", tmp) >= (int)sizeof path) {
+        fprintf(stderr, "temporary directory path is too long\n");
+        return -1;
+    }
+    int fd = mkstemp(path);
+    if (fd < 0) {
+        perror(path);
+        return -1;
+    }
+    int result = -1;
     static uint8_t buf[4096];
     for (uint64_t off = 0; off < size; off += sizeof buf) {
         for (size_t i = 0; i < sizeof buf; i++) buf[i] = (uint8_t)((off + i) / 512 * 7 + i + salt);
-        if (write(fd, buf, sizeof buf) != (ssize_t)sizeof buf) return -1;
+        if (write(fd, buf, sizeof buf) != (ssize_t)sizeof buf) {
+            fprintf(stderr, "cannot write test disk %s\n", path);
+            goto cleanup;
+        }
     }
+    result = hv_disk_open(disk, path, offset, 0);
+    if (result != 0) fprintf(stderr, "cannot open test disk %s\n", path);
+cleanup:
+    /* The test only needs the open descriptor from here on. */
+    unlink(path);
     close(fd);
-    return 0;
+    return result;
 }
 
 static void test_simple_devices(void) {
@@ -407,6 +465,19 @@ static void test_virtio_net(void) {
     uint32_t used_len;
     memcpy(&used_len, ram(rxq + 0x2000 + 8), 4);
     check("RX used length", used_len, 76);
+    const uint8_t *frames[]={frame,frame,frame};
+    uint32_t lengths[]={64,64,64};
+    uint64_t drops=board.net->rx_dropped;
+    put_desc(rxq,1,buf+0x2000,2048,2,0);
+    put_desc(rxq,2,buf+0x3000,8,2,0); /* consume/drop a too-small buffer */
+    offer(rxq,1);offer(rxq,2);
+    check("RX batch consumes only posted prefix",hv_virtio_net_receive_batch(board.net,frames,lengths,3),2);
+    check("RX batch completed bytes",memcmp(ram(buf+0x2000+12),frame,64),0);
+    check("RX batch drop returned to guest",board.net->rx_dropped,drops+1);
+    put_desc(rxq,3,buf+0x4000,2048,2,0);offer(rxq,3);
+    check("RX batch retries retained suffix",hv_virtio_net_receive_batch(board.net,frames+2,lengths+2,1),1);
+    check("RX batch suffix bytes",memcmp(ram(buf+0x4000+12),frame,64),0);
+    check("RX empty batch",hv_virtio_net_receive_batch(board.net,NULL,NULL,0),0);
 }
 
 /* The memory balloon: a new target reaches the driver (config change interrupt), inflated 16 KB pages go back
@@ -549,16 +620,13 @@ static void test_guest_programs(void) {
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
     if (hv_machine_init(&m, 4 << 20) != 0) return 1;
-    char root_path[1024], aux_path[1024];
-    snprintf(root_path, sizeof root_path, "%s/hv-test-root.img", work_dir());
-    snprintf(aux_path, sizeof aux_path, "%s/hv-test-aux.img", work_dir());
-    if (make_disk(root_path, 1 << 20, 1) || make_disk(aux_path, 256 << 10, 2)) {
-        printf("cannot create test disks in %s\n", work_dir());
+    static HvDisk root, aux;
+    if (make_disk(&root, 1 << 20, 0, 1) != 0) return 1;
+    /* As with auxiliary.bin, skip the 16 KB header. */
+    if (make_disk(&aux, 256 << 10, 16384, 2) != 0) {
+        hv_disk_close(&root);
         return 1;
     }
-    static HvDisk root, aux;
-    hv_disk_open(&root, root_path, 0, 0);
-    hv_disk_open(&aux, aux_path, 16384, 0); /* as with auxiliary.bin: skip the 16 KB header */
     HvCfgParams cfg = {.nr_cpus = 1, .ecid = 0x1234, .mac_en0 = {2, 0, 0, 0x12, 0x34, 0x56}};
     /* The balloon, over guest RAM in a file (holes read as zero at once) */
     char ram_path[1024];
@@ -570,10 +638,20 @@ int main(void) {
     static const uint8_t mac[6] = {2, 0, 0, 0x12, 0x34, 0x56};
     if (hv_vmapple_create(&board, &m, &cpu, RAM_SIZE, &root, &aux, &cfg, mac) != 0) return 1;
     hv_vmapple_reset_cpu(&board);
+    check("machine virtual-counter origin", cpu.cntvoff, m.cntvoff);
+    check("machine virtual-counter starts near zero", hv_counter()-cpu.cntvoff < 24000000, 1);
     check("reset pc", cpu.pc, VMAPPLE_FIRMWARE);
     check("aux disk skips its 16 KB header", aux.size, (256 << 10) - 16384);
 
     test_gic();
+    /* Virtual deadlines remain host-absolute after introducing a boot origin. */
+    cpu.cntvoff=hv_counter();cpu.cntv_ctl=1;cpu.cntp_ctl=0;
+    cpu.cntv_cval=24000000;
+    check("virtual timer deadline includes reset origin", hv_timer_update(board.gic,&cpu), cpu.cntvoff+cpu.cntv_cval);
+    cpu.cntv_cval=0;
+    hv_timer_update(board.gic,&cpu);
+    check("expired virtual timer raises PPI", board.gic->cpu[0].level[27],1);
+    cpu.cntv_ctl=0;hv_timer_update(board.gic,&cpu);
     test_simple_devices();
     test_bdif(&root, &aux);
     test_virtio_blk(&aux);
@@ -598,8 +676,6 @@ int main(void) {
 
     hv_disk_close(&root);
     hv_disk_close(&aux);
-    unlink(root_path);
-    unlink(aux_path);
     printf("%d checks, %d failures\n", checks, failures);
     return failures != 0;
 }

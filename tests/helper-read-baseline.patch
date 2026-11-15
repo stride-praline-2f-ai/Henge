@@ -1,0 +1,39 @@
+--- a/core/memop.c
++++ b/core/memop.c
+@@ -296,23 +296,8 @@
+                 (unsigned long long)cpu->x[30]);
+     }
+     while (len) {
+-        /* A live read tag validates the entire ordinary-RAM TLB granule.
+-           Coalesce reads across internal 4K boundaries only after this check.
+-           Misses and every write retain the precise 4K fallback below. */
+-        uint32_t span = (1u << HV_TLB_PAGE_BITS) - (uint32_t)(va & ((1u << HV_TLB_PAGE_BITS) - 1));
+-        if (span > len) span = len;
+-        const void *cached = write ? NULL : hv_tlb_read_span(cpu, va, span, el);
+-        if (cached) {
+-            if (cpu->m->stats_interval) cpu->m->stats.vmem_read_reuses++;
+-            memcpy(b, cached, span);
+-            va += span; b += span; len -= span;
+-            continue;
+-        }
+         uint32_t chunk = 4096 - (uint32_t)(va & 4095);
+         if (chunk > len) chunk = len;
+-        /* Plain reads can use the exact RAM span the JIT's TLB already checked.
+-           Stores retain hv_phys_write's ROM, watch and code-invalidation path.
+-           A miss still splits at 4K so smaller guest granules fault precisely. */
+         uint64_t pa;
+         int had_entry = 0;
+         if (cpu->m->stats_interval) { /* --stats: was the TLB entry there before this access? */
+@@ -350,10 +335,8 @@
+                 }
+             }
+         }
+-        const void *ram_bytes = hv_phys_ptr(cpu->m, pa, chunk);
+-        if (ram_bytes) {
+-            if (write) rc = hv_phys_write(cpu->m, pa, b, chunk);
+-            else memcpy(b, ram_bytes, chunk); /* resolve this physical span once */
++        if (hv_phys_ptr(cpu->m, pa, chunk)) {
++            rc = write ? hv_phys_write(cpu->m, pa, b, chunk) : hv_phys_read(cpu->m, pa, b, chunk);
+         } else {
+             for (uint32_t off = 0; off < chunk && !rc; off += 8) { /* MMIO: at most 8 bytes at a time */
+                 uint32_t piece = chunk - off < 8 ? chunk - off : 8;

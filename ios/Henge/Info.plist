@@ -38,6 +38,14 @@
 	</array>
 	<key>CFBundleVersion</key>
 	<string>101</string>
+	<key>GCSupportsGameMode</key>
+	<true/>
+	<key>HengeLinkExperimental</key>
+	<true/>
+	<key>HengeLinkProtocolVersion</key>
+	<integer>2</integer>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.games</string>
 	<key>LSApplicationQueriesSchemes</key>
 	<array>
 		<string>stikjit</string>
@@ -46,13 +54,9 @@
 		<string>apple-magnifier</string>
 		<string>localdevvpn</string>
 	</array>
-	<key>LSApplicationCategoryType</key>
-	<string>public.app-category.games</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>LSSupportsGameMode</key>
-	<true/>
-	<key>GCSupportsGameMode</key>
 	<true/>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
@@ -60,11 +64,14 @@
 	<array>
 		<string>_remotepairing-pairable-host._tcp</string>
 		<string>_remotepairing._tcp</string>
+		<string>_henge-link._tcp</string>
 	</array>
 	<key>NSCameraUsageDescription</key>
 	<string>Henge can use the volume buttons as the trackpad's mouse buttons. Receiving those presses needs the camera active; no video is recorded, saved or shown.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Henge uses the local network to pair with this iPhone for JIT, without a computer.</string>
+	<string>Henge uses the local network for on-device JIT pairing and for an encrypted display link between your own devices.</string>
+	<key>NSMotionUsageDescription</key>
+	<string>Use optional motion controls to steer racing games while this controller is visible.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

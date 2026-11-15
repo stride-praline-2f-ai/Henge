@@ -10,10 +10,14 @@ DECLARE_PROGRAM(bench_calls);
 DECLARE_PROGRAM(bench_mem);
 DECLARE_PROGRAM(bench_dispatch);
 DECLARE_PROGRAM(bench_loop);
+DECLARE_PROGRAM(bench_iter_load);
+DECLARE_PROGRAM(bench_stream);
+DECLARE_PROGRAM(bench_stream3);
+DECLARE_PROGRAM(bench_stream2);
 extern const char bench_programs_begin[], bench_programs_finish[];
 
 static const TestProgram programs[] = {
-    TEST_PROGRAM(bench_calls), TEST_PROGRAM(bench_mem), TEST_PROGRAM(bench_dispatch), TEST_PROGRAM(bench_loop),
+    TEST_PROGRAM(bench_calls), TEST_PROGRAM(bench_mem), TEST_PROGRAM(bench_dispatch), TEST_PROGRAM(bench_loop), TEST_PROGRAM(bench_iter_load), TEST_PROGRAM(bench_stream), TEST_PROGRAM(bench_stream3), TEST_PROGRAM(bench_stream2),
 };
 
 /* EL0, so the indirect-branch cache takes these low (user) addresses. */

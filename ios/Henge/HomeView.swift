@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import UniformTypeIdentifiers
 
 /// Your Mac as you left it, and one big button.
@@ -8,7 +9,13 @@ struct HomeView: View {
     @ObservedObject private var installer = Installer.shared
     @Binding var running: VirtualMac?
     @Binding var tab: RootView.Tab
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var path: [VirtualMac] = []
+    @AppStorage(InstantResume.key) private var automaticSave = true
     @State private var picking = false
+    @State private var showingLink = false
+    @AppStorage("henge.link.viewerOnly") private var viewerOnly = false
+    @AppStorage("henge.link.controlsOnly") private var controlsOnly = false
     @State private var jitReady = JITBootstrap.ready
     @State private var chosen: UUID?
     @State private var showMacApps = false
@@ -21,28 +28,43 @@ struct HomeView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(spacing: 14) {
-                    notices
-                    if let mac {
-                        MacHero(mac: mac, jitReady: jitReady, start: { running = mac }, turnOnJIT: { jit.enable() },
-                                jitNote: jitReady ? nil : (JITBootstrap.lastFailure ?? jit.automaticDescription))
-                        HStack(spacing: 10) {
-                            FactTile(title: "Disk", value: ByteText.string(UInt64(max(mac.bytesUsed, 0))))
-                            FactTile(title: "Last used", value: mac.lastUsedText)
+        NavigationStack(path: $path) {
+            GeometryReader { geometry in
+                ScrollView {
+                    VStack(spacing: 20) {
+                        notices
+                        OpeningDashboard(wide: geometry.size.width >= 900) {
+                            if let mac {
+                                MacHero(mac: mac, jitReady: jitReady,
+                                    start: { running = Machines.shared.fittedForStart(mac) },
+                                    turnOnJIT: { jit.enable() }, configure: { path.append(mac) },
+                                    jitNote: jitReady ? nil : (JITBootstrap.lastFailure ?? jit.automaticDescription))
+                            } else { firstMac }
+                        } connections: {
+                            VStack(spacing: 20) {
+                                WorkspaceConnections(canExtend: mac != nil && jitReady,
+                                    controls: { connect(controls: true) }, display: { connect(controls: false) },
+                                    extend: { showingLink = true })
+                                if mac != nil {
+                                    AutomaticSaveCard(enabled: $automaticSave)
+                                }
+                                if let mac {
+                                    HStack(spacing: 12) {
+                                        FactTile(title: "Disk used", value: ByteText.string(UInt64(max(mac.bytesUsed, 0))))
+                                        FactTile(title: "Last opened", value: mac.lastUsedText)
+                                    }
+                                }
+                            }
                         }
-                        others(besides: mac)
-                    } else {
-                        firstMac
+                        if let mac { others(besides: mac) }
                     }
+                    .padding(geometry.size.width >= 900 ? 28 : 18)
+                    .frame(maxWidth: 1176).frame(maxWidth: .infinity)
                 }
-                .padding(.horizontal, 16)
-                .padding(.bottom, 24)
-                .deskColumn()
             }
             .background(Desk.page)
             .navigationTitle("Henge")
+            .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(for: VirtualMac.self) { MacSettingsView(mac: $0) }
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
@@ -56,17 +78,27 @@ struct HomeView: View {
                     .accessibilityLabel("Add a Mac")
                 }
             }
+            .sheet(isPresented: $showingLink) {
+                if let mac { LinkHostView { running = mac } }
+            }
             .fileImporter(isPresented: $picking, allowedContentTypes: [.folder]) { result in
                 if case let .success(url) = result { machines.importFolder(url) }
             }
             .sheet(isPresented: $showMacApps) { MacAppsView() }
-            .task {
-                while !Task.isCancelled { // the region may be claimed after a hand-off to StikDebug
+            .task(id: scenePhase == .active && running == nil) {
+                guard scenePhase == .active, running == nil else { return }
+                repeat {
                     jitReady = JITBootstrap.ready
+                    if jitReady { return }
                     try? await Task.sleep(nanoseconds: 1_000_000_000)
-                }
+                } while !Task.isCancelled
             }
         }
+    }
+
+    private func connect(controls: Bool) {
+        LinkHostService.shared.stop(); jit.showSetup = false
+        controlsOnly = controls; viewerOnly = true
     }
 
     @ViewBuilder private var notices: some View {
@@ -159,77 +191,23 @@ private struct MacHero: View {
     let jitReady: Bool
     let start: () -> Void
     let turnOnJIT: () -> Void
+    let configure: () -> Void
     let jitNote: String?
     @AppStorage("henge.cpus") private var cpus = 4
-
-    var body: some View {
-        VStack(spacing: 0) {
-            NavigationLink(value: mac) {
-                VStack(spacing: 0) {
-                    preview
-                    HStack {
-                        Text(mac.name).font(.system(size: 24, weight: .bold)).foregroundStyle(Desk.text).lineLimit(1)
-                        Spacer()
-                        Text(jitReady ? "JIT on" : "JIT off")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(jitReady ? Desk.good : Desk.warn)
-                            .padding(.horizontal, 11)
-                            .padding(.vertical, 5)
-                            .background((jitReady ? Desk.good : Desk.warn).opacity(0.13), in: Capsule())
-                        Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(Desk.faint)
-                    }
-                    .padding(.top, 15)
-                    .padding(.horizontal, 5)
-                    Text("\(mac.summary) · \(cpus) CPUs")
-                        .font(.system(size: 15))
-                        .foregroundStyle(Desk.dim)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 5)
-                        .padding(.top, 3)
-                }
-            }
-            .buttonStyle(.plain)
-            if jitReady {
-                Button(action: start) {
-                    if InstantResume.enabled && InstantResume.hasSave(for: mac) {
-                        Label("Resume", systemImage: "play.fill")
-                    } else {
-                        Label("Start", systemImage: "play.fill")
-                    }
-                }
-                .buttonStyle(DeskButtonStyle())
-                .padding(.top, 15)
-            } else {
-                if let jitNote {
-                    Text(jitNote).font(.system(size: 13)).foregroundStyle(Desk.dim)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 5)
-                        .padding(.top, 10)
-                }
-                Button("Turn On JIT", action: turnOnJIT)
-                    .buttonStyle(DeskButtonStyle())
-                    .padding(.top, 15)
-            }
-        }
-        .padding(14)
-        .deskCard(radius: 30)
+    @ObservedObject private var resumeStatus = InstantResumeStatus.shared
+    @State private var previewImage: UIImage?
+    private var inMemory: Bool {
+        InstantResume.runtime.configuration(macID:mac.id,generation:henge_vm_generation(),state:henge_vm_state()) != nil
     }
-
-    @ViewBuilder private var preview: some View {
-        ZStack {
-            Desk.raised.opacity(0.5)
-            if let image = UIImage(contentsOfFile: MacPreview.file(for: mac).path) {
-                Image(uiImage: image).resizable().aspectRatio(contentMode: .fill)
-            } else {
-                Image(systemName: "macwindow.on.rectangle")
-                    .font(.system(size: 46, weight: .light))
-                    .foregroundStyle(Desk.faint)
-            }
+    var body: some View {
+        MacLaunchCard(name: mac.name, summary: "\(mac.summary) · \(cpus) CPUs",
+            ready: jitReady || inMemory, saved: InstantResume.hasSave(for: mac), inMemory: inMemory, preview: previewImage,
+            setupNote: jitNote, start: start, setup: turnOnJIT, configure: configure)
+        .task(id: mac.lastUsed) {
+            let path = MacPreview.file(for: mac).path
+            let image = await Task.detached(priority: .utility) { UIImage(contentsOfFile: path) }.value
+            if !Task.isCancelled { previewImage = image }
         }
-        .aspectRatio(mac.aspect, contentMode: .fit)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(Desk.hairline, lineWidth: 0.5))
-        .accessibilityHidden(true)
     }
 }
 

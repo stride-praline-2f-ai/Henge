@@ -199,6 +199,7 @@ final class JITCoordinator: ObservableObject {
     }
 
     func enable() {
+        guard !busy else { log("JIT setup already in progress; duplicate enable coalesced"); return }
         guard !JITBootstrap.ready else { return }
         // Turn On JIT while JIT is already being turned on (at launch, by itself) started a second helper, which attached
         // once the first let go and then stayed: with a debugger on, every trap stops Henge until it answers, and the
@@ -353,6 +354,7 @@ final class JITCoordinator: ObservableObject {
     }
 
     func enableBuiltIn(attempt: Int = 1) {
+        if attempt == 1 && busy { log("Built-in JIT setup already in progress; duplicate enable coalesced"); return }
         guard let pairing = builtInPairing() else { return }
         guard let script = JITBootstrap.scriptBase64 else {
             error = "Henge's JIT script is missing from this installation. Reinstall Henge."

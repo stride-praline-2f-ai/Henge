@@ -5,14 +5,14 @@ B = build
 
 CORE = $(B)/fastmem_log.o $(B)/fastmem.o $(B)/classify.o $(B)/operands.o $(B)/translate.o $(B)/dispatch.o $(B)/mmu.o $(B)/memop.o \
        $(B)/exception.o $(B)/sysreg.o $(B)/machine.o
-HOST = $(B)/jit_region.o $(B)/enter.o $(B)/disk.o
+HOST = $(B)/jit_region.o $(B)/enter.o $(B)/disk.o $(B)/disk_resize.o $(B)/scheduling.o
 DEV = $(B)/pvg_lite.o $(B)/pvg_metal.o $(B)/gicv3.o $(B)/timer.o $(B)/pl011.o $(B)/pl031.o $(B)/cfg.o $(B)/bdif.o $(B)/pcie.o \
       $(B)/virtio.o $(B)/virtio_blk.o $(B)/virtio_net.o $(B)/virtio_input.o $(B)/virtio_snd.o $(B)/virtio_usb.o $(B)/virtio_balloon.o $(B)/xhci.o $(B)/vmapple.o $(B)/aes.o $(B)/pl061.o $(B)/metallib.o
 ENGINE = $(CORE) $(HOST)
-METAL_LIBS = -framework Foundation -framework QuartzCore -framework Metal -framework IOSurface -framework CoreGraphics -framework ImageIO -framework UniformTypeIdentifiers
+METAL_LIBS = -framework Foundation -framework QuartzCore -framework Metal -weak_framework MetalFX -framework IOSurface -framework CoreGraphics -framework ImageIO -framework UniformTypeIdentifiers
 
 TESTS = $(B)/test_classify $(B)/test_jit_region $(B)/test_operands $(B)/test_jit $(B)/test_mem \
-        $(B)/test_mmu $(B)/test_exc $(B)/test_devices $(B)/test_shutdown
+        $(B)/test_mmu $(B)/test_inline_sysreg $(B)/test_exc $(B)/test_devices $(B)/test_fastmem $(B)/test_memory_bounds $(B)/test_idle_ticker $(B)/test_idle_integration $(B)/test_tail_recheck $(B)/test_audio_lifecycle $(B)/test_shutdown $(B)/test_usb_touchscreen
 
 all: $(TESTS) $(B)/hengevm $(B)/hengevm-ref $(B)/hvsparse
 
@@ -53,22 +53,35 @@ $(B)/henge-agent: tools/henge-agent.m
 	env -u SDKROOT -u IPHONEOS_DEPLOYMENT_TARGET xcrun --sdk macosx clang -arch arm64 -mmacosx-version-min=12.0 -fobjc-arc -Wall -Wextra -O2 -framework AppKit $< -o $@
 	codesign -f -s - $@
 
+# Guest-side USB-only native-touch companion; no restricted entitlement.
+$(B)/henge-touch-agent: tools/henge-touch-agent.swift tools/native-touch/*.swift
+	@mkdir -p $(B)
+	env -u SDKROOT -u IPHONEOS_DEPLOYMENT_TARGET xcrun --sdk macosx swiftc -parse-as-library -target arm64-apple-macos15.0 -O tools/henge-touch-agent.swift tools/native-touch/*.swift -o $@
+	codesign -f -s - $@
+
+# Verify and deterministically package both signed guest companions.
+.PHONY: native-touch-package-force
+$(B)/henge-touch-agent.tar.gz: $(B)/henge-touch-agent $(B)/henge-agent tools/package_native_touch.py native-touch-package-force
+	python3 tools/package_native_touch.py --binary $< --sharing-binary $(B)/henge-agent --output $@
+
+$(B)/native_touch.o: host/native_touch.c host/native_touch.h | $(B)
+	$(CC) $(CFLAGS) -c $< -o $@
+
 # Compressed in the app: tools that sign an IPA would try to sign a bare Mach-O too.
 $(B)/henge-agent.gz: $(B)/henge-agent
 	gzip -9 -n -c $< > $@
 
-$(B)/share.o: host/share.c host/share.h
+$(B)/share.o: host/share.c host/share.h host/native_touch.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(B)/hengevm: host/main.c $(ENGINE) $(DEV) $(B)/pvg_mac.o $(B)/net_slirp.o $(B)/dns_proxy.o $(B)/share.o $(B)/audio_mac.o $(B)/vm.o $(B)/snapshot.o $(B)/usb_host.o $(B)/mac-restore/libhengerestore.a
-	$(CC) $(CFLAGS) host/main.c $(ENGINE) $(DEV) $(B)/pvg_mac.o $(B)/net_slirp.o $(B)/dns_proxy.o $(B)/share.o $(B)/audio_mac.o $(B)/vm.o $(B)/snapshot.o $(B)/usb_host.o $(B)/mac-restore/libhengerestore.a -lz -lcompression -framework Foundation -framework CFNetwork -framework Security -framework SystemConfiguration -framework IOKit $(SLIRP_LIBS) -framework AudioToolbox -framework ParavirtualizedGraphics -framework Metal -framework IOSurface \
+$(B)/hengevm: host/main.c $(ENGINE) $(DEV) $(B)/pvg_mac.o $(B)/net_slirp.o $(B)/dns_proxy.o $(B)/share.o $(B)/native_touch.o $(B)/audio_mac.o $(B)/vm.o $(B)/snapshot.o $(B)/usb_host.o $(B)/mac-restore/libhengerestore.a
+	$(CC) $(CFLAGS) host/main.c $(ENGINE) $(DEV) $(B)/pvg_mac.o $(B)/net_slirp.o $(B)/dns_proxy.o $(B)/share.o $(B)/native_touch.o $(B)/audio_mac.o $(B)/vm.o $(B)/snapshot.o $(B)/usb_host.o $(B)/mac-restore/libhengerestore.a -lz -lcompression -framework Foundation -framework CFNetwork -framework Security -framework SystemConfiguration -framework IOKit $(SLIRP_LIBS) -framework AudioToolbox -framework ParavirtualizedGraphics -framework Metal -weak_framework MetalFX -framework IOSurface \
 	    -framework Foundation -framework CoreGraphics -framework ImageIO -framework UniformTypeIdentifiers -framework CoreFoundation \
 	    -framework AppKit -framework QuartzCore -o $@
 
+# mmu.c: no SIMD (hv_tlb_refill runs with the guest's SIMD registers live).
 $(B)/fastmem.o: core/fastmem.c core/*.h host/*.h | $(B)
 	$(CC) $(CFLAGS) -mgeneral-regs-only -c $< -o $@
-
-# mmu.c: no SIMD (hv_tlb_refill runs with the guest's SIMD registers live).
 $(B)/mmu.o: core/mmu.c core/*.h host/*.h | $(B)
 	$(CC) $(CFLAGS) -mgeneral-regs-only -c $< -o $@
 $(B)/%.o: core/%.c core/*.h host/*.h | $(B)
@@ -76,7 +89,7 @@ $(B)/%.o: core/%.c core/*.h host/*.h | $(B)
 $(B)/%.o: host/%.c host/*.h core/*.h devices/*.h | $(B)
 	$(CC) $(CFLAGS) -c $< -o $@
 $(B)/%.o: host/%.S | $(B)
-	$(CC) -c $< -o $@
+	$(CC) $(ASFLAGS) -c $< -o $@
 $(B)/%.o: devices/%.c devices/*.h core/*.h host/*.h | $(B)
 	$(CC) $(CFLAGS) -c $< -o $@
 
@@ -96,15 +109,29 @@ $(B)/test_shutdown: tests/test_shutdown.c $(ENGINE)
 $(B)/test_dns_lifecycle: tests/test_dns_lifecycle.c $(B)/dns_proxy.o
 	$(CC) $(CFLAGS) $^ -o $@
 
-$(B)/test_vm_lifecycle: tests/test_vm_lifecycle.c ios/Henge/Native/henge-vm.c $(ENGINE) $(DEV) $(B)/vm.o $(B)/snapshot.o $(B)/audio_mac.o $(B)/net_slirp.o $(B)/dns_proxy.o $(B)/share.o $(B)/usb_host.o
-	$(CC) $(CFLAGS) -Iios/Henge/Native $^ $(SLIRP_LIBS) $(METAL_LIBS) -framework AudioToolbox -lcompression -o $@
+$(B)/snapshot_test.o: host/snapshot.c | $(B)
+	$(CC) $(CFLAGS) -DHV_SNAPSHOT_TESTING=1 -c $< -o $@
+
+$(B)/vm_test.o: host/vm.c host/*.h devices/*.h core/*.h | $(B)
+	$(CC) $(CFLAGS) -DHV_VM_TESTING=1 -c $< -o $@
+
+$(B)/test_vm_lifecycle: tests/test_vm_lifecycle.c ios/Henge/Native/henge-vm.c $(ENGINE) $(DEV) $(B)/vm_test.o $(B)/snapshot_test.o $(B)/audio_mac.o $(B)/net_slirp.o $(B)/dns_proxy.o $(B)/share.o $(B)/native_touch.o $(B)/usb_host.o
+	$(CC) $(CFLAGS) -DHV_VM_TESTING=1 -Iios/Henge/Native $^ $(SLIRP_LIBS) $(METAL_LIBS) -framework AudioToolbox -lcompression -o $@
 
 test-vm-lifecycle: $(B)/test_vm_lifecycle
 	$(B)/test_vm_lifecycle
 .PHONY: test-vm-lifecycle
 
-$(B)/test_pvg_lifecycle: tests/test_pvg_lifecycle.m $(ENGINE) $(DEV)
-	$(CC) $(CFLAGS) -fobjc-arc $^ $(METAL_LIBS) -o $@
+$(B)/archive_fixture.metallib: tests/archive_fixture.metal | $(B)
+	xcrun -sdk macosx metal -c $< -o $(B)/archive_fixture.air
+	xcrun -sdk macosx metallib $(B)/archive_fixture.air -o $@
+
+$(B)/archive_%.metallib: tests/archive_fixture.metal | $(B)
+	xcrun -sdk macosx metal -DHENGE_ARCHIVE_FUNC_$*=1 -c $< -o $(B)/archive_$*.air
+	xcrun -sdk macosx metallib $(B)/archive_$*.air -o $@
+
+$(B)/test_pvg_lifecycle: tests/test_pvg_lifecycle.m $(ENGINE) $(DEV) $(B)/archive_fixture.metallib $(foreach f,av af anr ak ak2,$(B)/archive_$(f).metallib)
+	$(CC) $(CFLAGS) -fobjc-arc -DHENGE_TEST_ARCHIVE_FIXTURE='"$(B)/archive_fixture.metallib"' $(filter-out %.metallib,$^) $(METAL_LIBS) -o $@
 
 $(B)/hvsparse: tools/hvsparse_main.c host/hvsparse.c host/hvsparse.h | $(B)
 	$(CC) $(CFLAGS) tools/hvsparse_main.c host/hvsparse.c -o $@
@@ -126,6 +153,25 @@ clean:
 
 .PHONY: all test clean
 
+# Walker/cache policy tests; the main engine is ARM64/Darwin.
+$(B)/test_fastmem: tests/test_fastmem.c $(ENGINE)
+	$(CC) $(CFLAGS) tests/test_fastmem.c $(ENGINE) -o $@
+test-fastmem: $(B)/test_fastmem
+	$(B)/test_fastmem
+.PHONY: test-fastmem
+
+$(B)/test_memory_bounds: tests/test_memory_bounds.c $(ENGINE)
+	$(CC) $(CFLAGS) tests/test_memory_bounds.c $(ENGINE) -o $@
+
+$(B)/test_inline_sysreg: tests/test_inline_sysreg.c $(ENGINE)
+	$(CC) $(CFLAGS) tests/test_inline_sysreg.c $(ENGINE) -o $@
+
+$(B)/test_xhci_slots: tests/test_xhci_slots.c devices/xhci.c $(ENGINE) $(B)/pcie.o $(B)/gicv3.o
+	$(CC) $(CFLAGS) -fsanitize=address,undefined tests/test_xhci_slots.c $(ENGINE) $(B)/pcie.o $(B)/gicv3.o -o $@
+
+$(B)/test_stw_flush: tests/test_stw_flush.c $(ENGINE)
+	$(CC) $(CFLAGS) tests/test_stw_flush.c $(ENGINE) -o $@
+
 # ---- iOS: the engine as a static library for the Henge app (ios/) ----
 # make ios-lib -> build/ios/libhengevm.a. Networking links the arm64 iOS builds
 # of libslirp and glib from Husk's sysroot (scripts there make them); see ios/README.md.
@@ -135,10 +181,13 @@ IOS_CC = xcrun --sdk iphoneos clang -arch arm64 -miphoneos-version-min=17.0 -isy
 IOS_DEPS ?= $(if $(wildcard ios/deps/include/slirp/libslirp.h),$(CURDIR)/ios/deps,$(HOME)/Documents/Coding/Husk/build/ios-arm64/sysroot)
 IOS_CFLAGS = -std=c11 -Wall -Wextra -O2 -g -Icore -Ihost -Idevices -I$(IOS_DEPS)/include/slirp
 IB = build/ios
-IOS_SRC = $(wildcard core/*.c) host/prof_ios.c host/jit_region.c host/disk.c host/vm.c host/snapshot.c host/net_slirp.c host/dns_proxy.c host/share.c host/audio_mac.c host/hvsparse.c host/usb_host.c \
+IOS_SRC = $(wildcard core/*.c) host/prof_ios.c host/jit_region.c host/disk.c host/disk_resize.c host/scheduling.c host/vm.c host/snapshot.c host/net_slirp.c host/dns_proxy.c host/share.c host/native_touch.c host/audio_mac.c host/hvsparse.c host/usb_host.c \
           $(filter-out devices/pvg_mac.m,$(wildcard devices/*.c))
 IOS_OBJ = $(patsubst %.c,$(IB)/%.o,$(IOS_SRC)) $(IB)/host/enter.o $(IB)/devices/pvg_metal.o
 
+$(IB)/core/fastmem.o: core/fastmem.c core/*.h host/*.h devices/*.h
+	@mkdir -p $(dir $@)
+	$(IOS_CC) $(IOS_CFLAGS) -mgeneral-regs-only -c $< -o $@
 $(IB)/core/mmu.o: core/mmu.c core/*.h host/*.h devices/*.h
 	@mkdir -p $(dir $@)
 	$(IOS_CC) $(IOS_CFLAGS) -mgeneral-regs-only -c $< -o $@
@@ -189,7 +238,7 @@ $(B)/test_tl_app: tests/test_tl_app.m ios/Henge/Native/henge-tl-app.m ios/Henge/
 	  -lz -lbz2 -lcompression -o $@
 # Sample Mac programs for the app's Mac apps screen, as a disk image (read by the same import path as anyone's).
 $(B)/tl-samples.dmg: tests/tl/exit3.c tl/tests/hello.c tl/tests/fnd.m tl/tests/swifty.swift tl/tests/cxx.cpp tl/tests/fw.m tl/tests/fwapp.m | $(B)
-	make -C tl build/hello build/fnd build/swifty build/cxx build/FW.app/Contents/MacOS/fwapp
+	env -u IPHONEOS_DEPLOYMENT_TARGET SDKROOT="$$(xcrun --sdk macosx --show-sdk-path)" make -C tl CC="xcrun --sdk macosx clang" build/hello build/fnd build/swifty build/cxx build/FW.app/Contents/MacOS/fwapp
 	rm -rf $(B)/tl-samples $@ && mkdir -p $(B)/tl-samples
 	cp tl/build/hello "$(B)/tl-samples/Hello (C)"
 	cp tl/build/fnd "$(B)/tl-samples/Foundation sample"
@@ -232,6 +281,33 @@ $(B)/install.o: host/install.c host/*.h devices/*.h | $(B)
 restore-objs: $(RESTORE_OBJ)
 .PHONY: restore-objs
 
+$(B)/test_native_touch: tests/test_native_touch.c host/native_touch.c host/native_touch.h host/share.c host/share.h | $(B)
+	$(CC) $(CFLAGS) tests/test_native_touch.c host/native_touch.c host/share.c -o $@
+
+$(B)/test_native_touch_session: tests/test_native_touch_session.swift ios/Henge/NativeTouchSession.swift $(B)/native_touch.o
+	xcrun --sdk macosx swiftc -parse-as-library -import-objc-header host/native_touch.h tests/test_native_touch_session.swift ios/Henge/NativeTouchSession.swift $(B)/native_touch.o -o $@
+
+test-native-touch: $(B)/test_native_touch $(B)/test_native_touch_session
+	./$(B)/test_native_touch
+	./$(B)/test_native_touch_session
+.PHONY: test-native-touch
+
+$(B)/test_runner_control: tests/test_runner_control.c host/share.c host/share.h host/native_touch.c | $(B)
+	$(CC) $(CFLAGS) tests/test_runner_control.c host/share.c host/native_touch.c -o $@
+$(B)/test_runner_control_asan: tests/test_runner_control.c host/share.c host/share.h host/native_touch.c | $(B)
+	$(CC) $(CFLAGS) -O1 -fsanitize=address,undefined tests/test_runner_control.c host/share.c host/native_touch.c -o $@
+test-runner: $(B)/test_runner_control $(B)/test_runner_control_asan $(B)/henge-agent
+	./$(B)/test_runner_control
+	./$(B)/test_runner_control_asan
+.PHONY: test-runner
+
+$(B)/test_guest_connection: tests/test_guest_connection.swift tools/native-touch/GuestConnection.swift | $(B)
+	xcrun --sdk macosx swiftc -swift-version 6 -strict-concurrency=complete -warnings-as-errors -parse-as-library $^ -o $@
+
+test-guest-connection: $(B)/test_guest_connection
+	python3 tests/test_guest_connection.py $<
+.PHONY: test-guest-connection
+
 # Session-owned display routing, independent of JIT, Metal and a connected monitor.
 $(B)/test_display_targets: ios/Henge/DisplayTargetSelection.swift tests/test_display_targets.swift | $(B)
 	xcrun --sdk macosx swiftc $^ -o $@
@@ -268,32 +344,75 @@ test-jit-advice: $(B)/test_jit_advice
 	$(B)/test_jit_advice
 .PHONY: test-jit-advice
 
-$(B)/test_fastmem: tests/test_fastmem.c $(ENGINE)
-	$(CC) $(CFLAGS) -D_DARWIN_C_SOURCE -pthread $< $(ENGINE) -o $@
+$(B)/test_idle_integration: tests/test_idle_integration.c $(ENGINE)
+	$(CC) $(CFLAGS) tests/test_idle_integration.c $(ENGINE) -o $@
 
-$(B)/test_memory_bounds: tests/test_memory_bounds.c $(ENGINE)
-	$(CC) $(CFLAGS) -D_DARWIN_C_SOURCE -pthread $< $(ENGINE) -o $@
-
-$(B)/test_inline_sysreg: tests/test_inline_sysreg.c $(ENGINE)
-	$(CC) $(CFLAGS) -D_DARWIN_C_SOURCE -pthread $< $(ENGINE) -o $@
+$(B)/test_idle_ticker: tests/test_idle_ticker.c host/idle_ticker.h host/wake_epoch.h | $(B)
+	$(CC) $(CFLAGS) -pthread tests/test_idle_ticker.c -o $@
 
 $(B)/test_tail_recheck: tests/test_tail_recheck.c $(ENGINE)
-	$(CC) $(CFLAGS) -D_DARWIN_C_SOURCE -pthread $< $(ENGINE) -o $@
+	$(CC) $(CFLAGS) tests/test_tail_recheck.c $(ENGINE) -o $@
 
+$(B)/test_tlb_preload: tests/test_tlb_preload.c $(ENGINE)
+	$(CC) $(CFLAGS) tests/test_tlb_preload.c $(ENGINE) -o $@
+
+$(B)/test_audio_lifecycle: tests/test_audio_lifecycle.c tests/audio_test_api.h host/audio_mac.c | $(B)
+	$(CC) $(CFLAGS) -pthread tests/test_audio_lifecycle.c -o $@
+
+$(B)/test_cpu_sync: tests/test_cpu_sync.c $(ENGINE)
+	$(CC) $(CFLAGS) -pthread tests/test_cpu_sync.c $(ENGINE) -o $@
+
+$(B)/test_timer_dispatch: tests/test_timer_dispatch.c $(ENGINE)
+	$(CC) $(CFLAGS) $< $(ENGINE) -o $@
+
+# Real disk worker/virtqueue concurrency with explicit RAM/PCI boundaries.
+$(B)/test_blk_segments: tests/test_blk_segments.c devices/virtio_blk.c devices/*.h core/*.h host/*.h | $(B)
+	$(CC) $(CFLAGS) -ffunction-sections -fdata-sections -O1 -fsanitize=address,undefined tests/test_blk_segments.c -Wl,-dead_strip -o $@
+
+$(B)/bench_disk_iov: tests/bench_disk_iov.c host/disk.c host/disk.h | $(B)
+	$(CC) $(CFLAGS) tests/bench_disk_iov.c host/disk.c -o $@
+
+$(B)/test_frame_metrics: tests/test_frame_metrics.c devices/frame_metrics.h | $(B)
+	$(CC) $(CFLAGS) -O1 -fsanitize=address,undefined tests/test_frame_metrics.c -o $@
+
+$(B)/test_disk_iov: tests/test_disk_iov.c host/disk.c host/disk.h | $(B)
+	$(CC) $(CFLAGS) -D_DARWIN_C_SOURCE -O1 -fsanitize=address,undefined tests/test_disk_iov.c -o $@
+
+$(B)/test_blk_completion: tests/test_blk_completion.c devices/virtio_blk.c devices/virtio.c host/disk.c devices/*.h core/*.h host/*.h | $(B)
+	$(CC) $(CFLAGS) -D_DARWIN_C_SOURCE -D_DEFAULT_SOURCE -pthread -O1 -fsanitize=address,undefined tests/test_blk_completion.c devices/virtio_blk.c devices/virtio.c host/disk.c -o $@
+
+$(B)/test_fastmem_bench: tests/test_fastmem_bench.c $(ENGINE)
+	$(CC) $(CFLAGS) tests/test_fastmem_bench.c $(ENGINE) -o $@
+
+# Guest USB touchscreen research: protocol checks need no macOS image.
+$(B)/test_usb_touchscreen: tests/test_usb_touchscreen.c $(ENGINE) $(DEV)
+	$(CC) $(CFLAGS) -O1 -fsanitize=address,undefined $^ $(METAL_LIBS) -o $@
+
+test-usb-touchscreen: $(B)/test_usb_touchscreen
+	@mkdir -p $(B)/usb-touch-research
+	./$(B)/test_usb_touchscreen
+.PHONY: test-usb-touchscreen
+
+$(B)/test_pvg_task_memory: tests/test_pvg_task_memory.c devices/pvg_lite.c $(ENGINE) $(filter-out $(B)/pvg_lite.o,$(DEV))
+	$(CC) $(CFLAGS) -O1 -fsanitize=address,undefined tests/test_pvg_task_memory.c $(ENGINE) $(filter-out $(B)/pvg_lite.o,$(DEV)) $(METAL_LIBS) -o $@
+
+# Partial code-cache eviction against real multi-vCPU translated execution.
 $(B)/test_jit_ring: tests/test_jit_ring.c $(ENGINE)
 	$(CC) $(CFLAGS) -D_DARWIN_C_SOURCE -pthread $< $(ENGINE) -o $@
 
-$(B)/test_register_groups: tests/test_register_groups.c $(ENGINE)
-	$(CC) $(CFLAGS) -D_DARWIN_C_SOURCE -pthread $< $(ENGINE) -o $@
+$(B)/bench_far_chain: tests/bench_far_chain.c $(ENGINE)
+	$(CC) $(CFLAGS) $< $(ENGINE) -o $@
+$(B)/test_pvg_linear_bounds: tests/test_pvg_linear_bounds.c devices/pvg_linear_bounds.h | $(B)
+	$(CC) $(CFLAGS) -O1 -fsanitize=address,undefined $< -o $@
 
-.PHONY: test-memory-jit
-test-memory-jit: $(B)/test_fastmem $(B)/test_memory_bounds $(B)/test_inline_sysreg $(B)/test_tail_recheck $(B)/test_jit_ring $(B)/test_register_groups
-	$(B)/test_fastmem
-	$(B)/test_memory_bounds
-	$(B)/test_inline_sysreg
-	$(B)/test_tail_recheck
-	$(B)/test_jit_ring
-	$(B)/test_register_groups
+$(B)/test_snapshot_pack: tests/test_snapshot_pack.c host/snapshot.c host/snapshot.h | $(B)
+	$(CC) $(CFLAGS) -fblocks -ffunction-sections -fdata-sections -O1 -fsanitize=address,undefined tests/test_snapshot_pack.c -lcompression -Wl,-dead_strip -o $@
+
+$(B)/bench_snapshot_admission: tests/bench_snapshot_admission.c host/snapshot.c host/snapshot.h | $(B)
+	$(CC) $(CFLAGS) -fblocks -ffunction-sections -fdata-sections $< -lcompression -Wl,-dead_strip -o $@
+
+$(B)/test_register_groups: tests/test_register_groups.c $(ENGINE)
+	$(CC) $(CFLAGS) $^ -o $@
 
 # Differential build: same production emitter, previous register-only policy.
 $(B)/translate-register-reference.o: core/translate.c core/*.h host/*.h | $(B)
@@ -309,14 +428,11 @@ $(B)/bench_stack_groups_reference: tests/bench_stack_groups.c tests/mem_programs
 $(B)/test_exc_register_reference: tests/test_exc.c tests/exc_programs.S tests/harness.S $(ENGINE_REGISTER_REFERENCE)
 	$(CC) $(CFLAGS) $^ -o $@
 
-$(B)/bench_interleaved_groups: tests/bench_interleaved_groups.c tests/mem_programs.S $(ENGINE)
-	$(CC) $(CFLAGS) $^ -o $@
+$(B)/test_net_batch: tests/test_net_batch.c devices/virtio_net.c devices/virtio.c devices/*.h core/*.h host/*.h | $(B)
+	$(CC) $(CFLAGS) -O1 -fsanitize=address,undefined tests/test_net_batch.c devices/virtio_net.c devices/virtio.c -o $@
 
-$(B)/bench_jit_retention: tests/bench_jit_retention.c $(ENGINE)
-	$(CC) $(CFLAGS) $^ -o $@
-
-$(B)/bench_branch_sites: tests/bench_branch_sites.c $(ENGINE)
-	$(CC) $(CFLAGS) $^ -o $@
+$(B)/bench_interleaved_groups: tests/bench_interleaved_groups.c tests/mem_programs.S tests/harness.S $(ENGINE)
+	$(CC) $(CFLAGS) -Itests $^ -o $@
 
 $(B)/test_ijc_eviction: tests/test_ijc_eviction.c $(ENGINE)
 	$(CC) $(CFLAGS) $^ -o $@
@@ -324,5 +440,11 @@ $(B)/test_ijc_eviction: tests/test_ijc_eviction.c $(ENGINE)
 $(B)/test_jit_retention: tests/test_jit_retention.c $(ENGINE)
 	$(CC) $(CFLAGS) $^ -o $@
 
+$(B)/bench_jit_retention: tests/bench_jit_retention.c $(ENGINE)
+	$(CC) $(CFLAGS) $^ -o $@
+
 $(B)/test_branch_sites: tests/test_branch_sites.c $(ENGINE)
+	$(CC) $(CFLAGS) $^ -o $@
+
+$(B)/bench_branch_sites: tests/bench_branch_sites.c $(ENGINE)
 	$(CC) $(CFLAGS) $^ -o $@

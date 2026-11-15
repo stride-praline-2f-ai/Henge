@@ -2,6 +2,7 @@
 #define HENGEVM_VMAPPLE_H
 
 #include <stdint.h>
+#include <stdatomic.h>
 
 #include "aes.h"
 #include "bdif.h"
@@ -50,6 +51,8 @@
 #define VMAPPLE_MSI_BASE 96   /* INTIDs handed out through the MSI frame */
 #define VMAPPLE_MSI_COUNT 64
 
+enum HvRamBacking { HV_RAM_NONE, HV_RAM_LEDGER, HV_RAM_FILE, HV_RAM_ANONYMOUS };
+
 typedef struct HvVmapple {
     uint64_t avp_rtc[8];     /* Apple virtual RTC control registers +0x00..+0x38 (only +0x18, +0x20, +0x38 are written) */
     HvMachine *m;
@@ -73,10 +76,12 @@ typedef struct HvVmapple {
     uint8_t *cfg, *rom, *ram;
     uint64_t ram_size;
     int ram_fd;              /* the file under guest RAM, kept open for the balloon's holes, or -1 */
+    enum HvRamBacking ram_backing; /* actual successful allocation, not an entitlement guess */
     uint64_t panic_events;   /* last pvpanic event the guest reported */
     void *ctrr, *sealed;
     pthread_t prefault_thread;
     int prefault_started;
+    _Atomic int prefault_stop;
     void (*poll)(void);      /* extra device work on the CPU thread each tick (Mac PVG) */
 } HvVmapple;
 

@@ -5,7 +5,7 @@ import Foundation
 enum Entitlements {
     static let increasedMemory = has("com.apple.developer.kernel.increased-memory-limit")
     static let extendedAddressing = has("com.apple.developer.kernel.extended-virtual-addressing")
-    /// What iOS allowed when the app opened, before the JIT region took its share.
+    /// Available process headroom at launch, not a measured hard memory limit.
     static let memoryLimitAtLaunch = henge_available_memory()
 
     private typealias CreateFromSelf = @convention(c) (CFAllocator?) -> CFTypeRef?

@@ -12,13 +12,15 @@ struct HengeApp: App {
         // allocator's first lines land in Documents/henge.log too.
         HengeLog.start()
         HengeLog.log("boot", "address space: \(henge_largest_reservation_gb()) GB can be reserved in one piece")
+        M4Performance.prepareDiagnosticBuild()
         EngineTuning.apply()
+        M4Performance.logProfile()
         HengeLog.logFootprint("app-launch")
         JITBootstrap.noteLaunchState()
-        HengeLog.log("app", "increased memory limit: \(Entitlements.increasedMemory ? "yes" : "no"); extended addressing: \(Entitlements.extendedAddressing ? "yes" : "no"); limit \(Entitlements.memoryLimitAtLaunch >> 20) MB")
+        HengeLog.log("app", "increased memory limit: \(Entitlements.increasedMemory ? "yes" : "no"); extended addressing: \(Entitlements.extendedAddressing ? "yes" : "no"); process headroom at launch \(Entitlements.memoryLimitAtLaunch >> 20) MiB")
         // Without the guard, a brk no debugger answers kills the app instead of failing.
         JITBootstrap.installTrapGuard()
-        try? AVAudioSession.sharedInstance().setCategory(.playback, options: [.mixWithOthers])
+        AudioSessionRecovery.shared.start()
         Machines.shared.collectImports()
         // The display question: does this iOS have Apple's paravirtualized graphics at all?
         for path in ["/System/Library/Frameworks/ParavirtualizedGraphics.framework/ParavirtualizedGraphics",
@@ -30,7 +32,10 @@ struct HengeApp: App {
     var body: some Scene {
         WindowGroup {
             RootView()
-                .onOpenURL { url in HengeLog.log("app", "opened with \(url.absoluteString)") } // henge:// back from LocalDevVPN
+                .onOpenURL { url in
+                    // Callback queries can contain tokens. Log receipt without their contents.
+                    HengeLog.log("app", "URL callback received; scheme=\(url.scheme ?? "?"); path/query omitted")
+                } // henge:// back from LocalDevVPN
         }
     }
 }
@@ -44,37 +49,41 @@ struct RootView: View {
     @State private var running: VirtualMac?
     @State private var tab = Tab.macs
     @AppStorage(DeskAppearance.key) private var appearance = DeskAppearance.system
+    @AppStorage("henge.link.viewerOnly") private var viewerOnly = false
 
     var body: some View {
         ZStack {
-            TabView(selection: $tab) {
-                HomeView(running: $running, tab: $tab)
-                    .tabItem { Label("Macs", systemImage: "macwindow") }
-                    .tag(Tab.macs)
-                InstallView()
-                    .tabItem { Label("Install", systemImage: "arrow.down.circle") }
-                    .tag(Tab.install)
-                SettingsView()
-                    .tabItem { Label("Settings", systemImage: "gearshape") }
-                    .tag(Tab.settings)
-            }
-            .tint(Desk.accentLight)
-            if let running {
-                SessionView(mac: running) { self.running = nil }
-                    .environment(\.colorScheme, .dark) // still dark while it fades out over a light page
-                    .transition(.opacity)
+            if viewerOnly {
+                LinkViewerView { viewerOnly = false }
+            } else {
+                TabView(selection: $tab) {
+                    HomeView(running: $running, tab: $tab)
+                        .tabItem { Label("Macs", systemImage: "macwindow") }
+                        .tag(Tab.macs)
+                    InstallView()
+                        .tabItem { Label("Install", systemImage: "arrow.down.circle") }
+                        .tag(Tab.install)
+                    SettingsView()
+                        .tabItem { Label("Settings", systemImage: "gearshape") }
+                        .tag(Tab.settings)
+                }
+                .tint(Desk.accentLight)
+                if let running {
+                    SessionView(mac: running) { LinkHostService.shared.stop(); self.running = nil }
+                        .transition(.opacity)
+                }
             }
         }
         .background(WindowStyle(style: running != nil ? .dark : appearance.style))
         .sheet(isPresented: $jit.showSetup) { JITSetupFlow() }
-        .task(id: scenePhase) {
-            guard scenePhase == .active else { return }
+        .task(id: viewerOnly ? "link-viewer" : String(describing: scenePhase)) {
+            guard !viewerOnly, scenePhase == .active else { return }
             machines.collectImports()
             jit.enableAtLaunchIfAsked()
             // StikDebug can launch Henge before it attaches. A task also runs
             // on the first appearance, when there may be no phase change.
             for _ in 0..<100 {
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled, !viewerOnly else { return }
                 if JITBootstrap.prewarmed || JITBootstrap.isLive {
                     jit.objectWillChange.send()
                     return
@@ -89,13 +98,17 @@ struct RootView: View {
                 catch { return } // going into the background cancels this wait
             }
         }
-        .onChange(of: jit.attachGeneration) { _ in JITBootstrap.prewarm() } // the built-in helper attached
+        .onChange(of: jit.attachGeneration) { _ in if !viewerOnly { JITBootstrap.prewarm() } } // the built-in helper attached
         .task { // testing only: HENGE_AUTOPILOT
+            guard !viewerOnly else { return }
             await Autopilot.run { mac in
-                // A session still on screen (its Mac stopped) is closed first: the same value again would start nothing.
+                guard !viewerOnly else { return }
+                // Close a stopped session before starting the same Mac again.
                 guard running != nil else { running = mac; return }
                 running = nil
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1) { running = mac }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                    if !viewerOnly { running = mac }
+                }
             }
         }
     }

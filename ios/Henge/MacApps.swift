@@ -40,7 +40,7 @@ struct MacApp: Identifiable, Hashable {
     var verdict: (title: String, detail: String) {
         switch UInt32(kind) {
         case HENGE_TL_PROGRAM.rawValue:
-            return ("Runs without macOS (experimental)",
+            return ("Try without macOS (experimental)",
                     "A program without windows: Henge loads it into itself and runs it, with no Mac started.")
         case HENGE_TL_SWIFTUI.rawValue:
             return ("Not yet: a SwiftUI app",
@@ -153,7 +153,7 @@ struct MacAppsView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 0) {
-                    Text("Mac apps and programs run here through Henge's own translation layer, with no Mac started. Programs without windows run today; apps with windows are next. Experimental.")
+                    Text("Mac apps and programs run here through Henge's own translation layer, with no Mac started. Some command-line programs are compatible. Xcode, its build chain and the GitHub Actions runner are not supported yet. This is not a complete macOS environment. Experimental.")
                         .font(.system(size: 14)).foregroundStyle(Desk.dim)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 4).padding(.bottom, 12)

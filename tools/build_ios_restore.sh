@@ -77,6 +77,13 @@ compile henge -std=c11 -I"$ROOT/core" -I"$ROOT/host" -I"$ROOT/devices" -- \
 compile hengeobjc -fobjc-arc -- "$ROOT/host/curl_shim.m"
 
 rm -f "$BUILD/libhengerestore.a"
-xcrun --sdk $SDKNAME libtool -static -no_warning_for_no_symbols -o "$BUILD/libhengerestore.a" \
-    "${OBJS[@]}" "$DEPS/libzip/lib/libzip.a" 2>&1 | grep -v 'same member name' || true
+if ! xcrun --sdk $SDKNAME libtool -static -no_warning_for_no_symbols -o "$BUILD/libhengerestore.a" \
+    "${OBJS[@]}" "$DEPS/libzip/lib/libzip.a" > "$OUT/archive.log" 2>&1; then
+    cat "$OUT/archive.log" >&2
+    rm -f "$BUILD/libhengerestore.a"
+    exit 1
+fi
+# Filtering cosmetic duplicate-member warnings must not swallow archive errors.
+grep -v 'same member name' "$OUT/archive.log" || true
+test -s "$BUILD/libhengerestore.a"
 ls -la "$BUILD/libhengerestore.a"
