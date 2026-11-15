@@ -23,7 +23,7 @@ Each PR targets the preceding topic branch so its diff stays focused. The final 
 
 ## Validation boundaries
 
-The shipped custom aggregate passed native, sanitizer and Release app checks in [43719589751](https://github.com/stride-praline-2f-ai/henge-/actions/runs/43719589751). That historical result does not validate this extraction: current upstream Mac Apps code and legacy iOS17 library loading are retained here. Exact extracted-engine and full-series checks run separately in the build repository; consult their actual results before marking drafts ready.
+The shipped custom aggregate passed native, sanitizer and Release app checks in [43719589751](https://github.com/stride-praline-2f-ai/henge-/actions/runs/43719589751). That historical result does not validate this extraction: current upstream Mac Apps code and legacy iOS17 library loading are retained here. Exact extracted-engine and full-series checks ran separately in the build repository. Engine checks, the complete app compile, input/Link/USB/disk checks, lifecycle sanitizers and focused statistics passed. The strict persistent half-float pipeline-archive hit assertion failed on one cloud adapter; the independent raw Metal control reproduced archive misses and executed all four PSOs through fallback. The original assertion is retained and the drafts are not declared merge-ready. See [VALIDATION.md](VALIDATION.md).
 
 Cloud arm64 Macs do not verify physical M4/Duo energy, folding, Pencil behavior, radio reconnects, Metal4 availability or every macOS game. No hardware FPS/heat claim is implied. No IPA or release action is added by this series.
 

@@ -3,7 +3,7 @@
   "source_fork": "stride-praline-2f-ai/Henge",
   "build_repository": "stride-praline-2f-ai/henge-",
   "baseline": "e98920ce3b108d17f98acaff87f74e5a477ec4b2",
-  "status": "fork-local drafts; upstream creation403; exact extraction validation pending",
+  "status": "12 fork-local feature drafts; direct upstream publication blocked403; tests and remaining archive limitation recorded",
   "pull_requests": [
     {
       "branch": "contribute/engine-memory-jit",
@@ -101,5 +101,24 @@
       "base": "contribute/device-policy-diagnostics",
       "upstream_compare": "https://github.com/Leviidev/Henge/compare/main...stride-praline-2f-ai:contribute/app-integration-ui?expand=1"
     }
-  ]
+  ],
+  "validation": {
+    "tested_engine_code_sha": "a40441dd378c76c1af9306dfa113b161fa896c7b",
+    "tested_engine_tree": "a19cfd6ae1d1d2f4bb014af5445ba77f2e3fa004",
+    "tested_series_sha": "27284c58997bc0ebc122b2f63a590e5dd1742be4",
+    "tested_series_tree": "2c16f0b5136089b27be690736bbd8351d73203c3",
+    "engine_run": 43724598061,
+    "engine_result": "success",
+    "full_source_run": 43724794272,
+    "full_app_compile": "success; unsigned app compile only, no IPA",
+    "native_result": "strict saved RGBA16Float archive-hit assertion failed at test_pvg_lifecycle.m:118; regular compilation recovered; original assertion retained",
+    "independent_followup_run": 43725203923,
+    "independent_followup": "raw public Metal reproduced render/compute archive misses; all four PSOs executed through checked fallback; input/Link/USB/disk checks passed; sanitizer/concurrency checks passed except missing regular fixture for stats check",
+    "focused_stats_run": 43725962234,
+    "focused_stats_result": "success after building required regular production lifecycle fixture; no test disabled",
+    "hardware_validation": "not performed; M4/Duo performance, iOS17 fallback, Pencil/folding/wireless and physical Metal4/FX require devices",
+    "upstream_submission": "HTTP403 Resource not accessible by integration; browser control unavailable",
+    "merge_ready": false,
+    "IPA_generated": false
+  }
 }
