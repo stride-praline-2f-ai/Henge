@@ -3,7 +3,7 @@ import UIKit
 
 /// A Mac made on the Mac (HengeVM or Henge) and brought over: its boot ROM,
 /// disk and auxiliary storage, and the identity it was installed with.
-struct VirtualMac: Identifiable, Codable, Hashable {
+struct VirtualMac: Identifiable, Codable, Hashable, Sendable {
     var id = UUID()
     var name: String
     var ecid: UInt64
@@ -16,10 +16,54 @@ struct VirtualMac: Identifiable, Codable, Hashable {
     /// The size macOS is told its screen is. Macs made before this was a choice have none: 16:9.
     var screenWidth: Int?
     var screenHeight: Int?
-    /// m4 fork: the iPad's own panel at Retina density. On by default on iPad, for Macs that never chose.
+    /// Explicit Fit selection; nil retains compatibility with older saved Macs.
+    var fitScreen: Bool?
+    /// The iPad's panel at Retina density. Nil preserves an older Mac's display choice;
+    /// new high-memory M4 Macs explicitly select Retina when they are created.
     var retina: Bool?
-    var isRetina: Bool { Device.isPad && (retina ?? false) }
-    var screen: (width: Int, height: Int) { isRetina ? Device.retinaScreen : (screenWidth ?? 1920, screenHeight ?? 1080) }
+    /// Explicit reference desktop at 1280 logical points, fitted and rendered at 2x.
+    var desktopLayout: Bool?
+    /// Opt-in reconstructed desktop. Missing in existing Macs: native Retina.
+    var desktopMetalFX: Bool?
+    /// On an iPhone's large screen (iPhone Duo unfolded): fill it, or leave a strip at the right for the status
+    /// bar and Henge's controls. Macs that never chose fill it.
+    var fillScreen: Bool?
+    var usesDesktopMetalFX: Bool {
+        desktopLayout == true && desktopMetalFX == true && Device.supportsDesktopMetalFX &&
+        UserDefaults.standard.string(forKey: EngineTuning.graphicsBackendKey) != "compatibility"
+    }
+    var isRetina: Bool { !usesDesktopMetalFX && (desktopLayout == true || (Device.isPad && (retina ?? false))) }
+    var fitsDeviceScreen: Bool {
+        !isRetina && GuestScreenSize.usesFit(width: screenWidth, height: screenHeight, selected: fitScreen)
+    }
+    func displaySize(in viewport: CGSize) -> GuestScreenSize {
+        if desktopLayout == true {
+            var area = viewport
+            if Device.largeScreen && !(fillScreen ?? true) {
+                if area.width >= area.height { area.width -= Device.sideStrip }
+                else { area.height -= Device.sideStrip }
+            }
+            let size = Device.desktopRetina(in: area)
+            return usesDesktopMetalFX ? size.desktopWorkspace : size
+        }
+        if isRetina {
+            let size = Device.retinaScreen
+            return GuestScreenSize(width: size.width, height: size.height)
+        }
+        if fitsDeviceScreen {
+            var area = viewport
+            if Device.largeScreen && !(fillScreen ?? true) {
+                if area.width >= area.height { area.width -= Device.sideStrip }
+                else { area.height -= Device.sideStrip }
+            }
+            return GuestScreenSize.fitting(in: area)
+        }
+        return GuestScreenSize(width: screenWidth ?? 1920, height: screenHeight ?? 1080)
+    }
+    var screen: (width: Int, height: Int) {
+        let size = displaySize(in: Device.displayViewport)
+        return (size.width, size.height)
+    }
     var aspect: CGFloat { CGFloat(screen.width) / CGFloat(screen.height) }
 
     var directory: URL { Machines.directory(for: id) }
@@ -29,8 +73,8 @@ struct VirtualMac: Identifiable, Codable, Hashable {
 }
 
 /// How much RAM a Mac gets. The engine first asks the kernel to leave it out of Henge's footprint,
-/// which is allowed once a debugger has attached (how JIT is turned on). If that is refused it uses
-/// a file beside the disk: iOS's memory limit does not count a mapped file's pages either.
+/// which the kernel may allow after JIT setup. If refused, it attempts file backing
+/// beside the disk. Neither method guarantees unlimited resident RAM or immunity to jetsam.
 enum GuestMemory {
     /// Points the engine at the file (it is unlinked as soon as it is open) and returns the size that fits.
     static func prepare(_ mac: VirtualMac) -> UInt64 {
@@ -42,6 +86,10 @@ enum GuestMemory {
         let reach = henge_largest_mapping_mb()
         let ram = min(UInt64(mac.ramMB), room, reach > 512 ? reach - 512 : 0) / 512 * 512
         HengeLog.log("session", "guest RAM \(ram) MB (asked \(mac.ramMB), disk room \(room), largest mapping \(reach))")
+        let physicalMB=ProcessInfo.processInfo.physicalMemory >> 20
+        if ram>=physicalMB {
+            HengeLog.log("memory","Guest allocation \(ram) MiB meets/exceeds device physical \(physicalMB) MiB. Process allowance is separate; iOS/JIT/Metal share physical RAM. Explicit user RAM retained; no silent resizing of saved state.")
+        }
         return ram
     }
 }
@@ -64,7 +112,7 @@ final class Machines: ObservableObject {
 
     /// The files an exported machine folder holds; its disk is disk.img, or disk.img.hvsparse (tools/export_ios.sh packs it).
     static let required = ["AVPBooter.vmapple2.bin", "auxiliary.bin", "machine.json"]
-    static let packedDisk = "disk.img.hvsparse"
+    nonisolated static let packedDisk = "disk.img.hvsparse"
 
     nonisolated static func hasDisk(_ folder: URL) -> Bool {
         let fm = FileManager.default
@@ -210,7 +258,7 @@ final class Machines: ObservableObject {
     /// in Documents/Exports, which the Files app can reach. Deleting Henge deletes that folder too,
     /// so it has to be moved out of Henge before a reinstall that replaces the app's data.
     func export(_ mac: VirtualMac) {
-        guard exporting == nil, importing == nil else { return }
+        guard exporting == nil, importing == nil, !DiskExpansion.shared.busy else { return }
         exporting = mac.name
         exported = 0
         lastExport = nil
@@ -273,6 +321,23 @@ final class Machines: ObservableObject {
         save()
     }
 
+    /// A Mac set to fit takes the shape of the screen it starts on: an iPhone with two screens (iPhone Duo) has
+    /// two shapes, and a Mac fitted to one shows bars on the other. On an iPhone anything but 16:9 is the fit
+    /// (MacSettingsView). A Mac with a saved session keeps its size, which the save is for; an iPad has one panel.
+    func fittedForStart(_ mac: VirtualMac) -> VirtualMac {
+        guard !Device.isPad, !InstantResume.hasSave(for: mac) else { return mac }
+        let fit = Device.fitting(for: mac)
+        let now = mac.screen
+        // Only where a fit is not 16:9, which is an iPhone Duo's two screens: any other iPhone keeps what a Mac has.
+        guard !(fit.width == 1920 && fit.height == 1080),
+              !(now.width == 1920 && now.height == 1080), !(now.width == fit.width && now.height == fit.height) else { return mac }
+        var fitted = mac
+        (fitted.screenWidth, fitted.screenHeight) = fit
+        HengeLog.log("session", "screen \(mac.screen.width)x\(mac.screen.height) refitted to this display: \(fit.width)x\(fit.height)")
+        update(fitted)
+        return fitted
+    }
+
     func update(_ mac: VirtualMac) {
         guard let i = all.firstIndex(where: { $0.id == mac.id }) else { return }
         all[i] = mac
@@ -280,6 +345,7 @@ final class Machines: ObservableObject {
     }
 
     func delete(_ id: UUID) {
+        guard !DiskExpansion.shared.busy else { lastError="Wait for disk expansion to finish before deleting a Mac.";return }
         try? FileManager.default.removeItem(at: Self.directory(for: id))
         all.removeAll { $0.id == id }
         save()

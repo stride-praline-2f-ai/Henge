@@ -1,0 +1,124 @@
+{
+  "upstream": "Leviidev/Henge",
+  "source_fork": "stride-praline-2f-ai/Henge",
+  "build_repository": "stride-praline-2f-ai/henge-",
+  "baseline": "e98920ce3b108d17f98acaff87f74e5a477ec4b2",
+  "status": "12 fork-local feature drafts; direct upstream publication blocked403; tests and remaining archive limitation recorded",
+  "pull_requests": [
+    {
+      "branch": "contribute/engine-memory-jit",
+      "number": 1,
+      "url": "https://github.com/stride-praline-2f-ai/Henge/pull/1",
+      "sha": "a40441dd378c76c1af9306dfa113b161fa896c7b",
+      "base": "main",
+      "upstream_compare": "https://github.com/Leviidev/Henge/compare/main...stride-praline-2f-ai:contribute/engine-memory-jit?expand=1"
+    },
+    {
+      "branch": "contribute/vm-lifecycle-idle",
+      "number": 2,
+      "url": "https://github.com/stride-praline-2f-ai/Henge/pull/2",
+      "sha": "bfe51d2219a9c6c99875c456793419808e8b955f",
+      "base": "contribute/engine-memory-jit",
+      "upstream_compare": "https://github.com/Leviidev/Henge/compare/main...stride-praline-2f-ai:contribute/vm-lifecycle-idle?expand=1"
+    },
+    {
+      "branch": "contribute/instant-resume",
+      "number": 3,
+      "url": "https://github.com/stride-praline-2f-ai/Henge/pull/3",
+      "sha": "dab858d22d274900114b7dac494e7e2f7ed06946",
+      "base": "contribute/vm-lifecycle-idle",
+      "upstream_compare": "https://github.com/Leviidev/Henge/compare/main...stride-praline-2f-ai:contribute/instant-resume?expand=1"
+    },
+    {
+      "branch": "contribute/storage-io-growth",
+      "number": 4,
+      "url": "https://github.com/stride-praline-2f-ai/Henge/pull/4",
+      "sha": "2a7a3edfb832fa7bf1caf69981bc4cea1c4839e3",
+      "base": "contribute/instant-resume",
+      "upstream_compare": "https://github.com/Leviidev/Henge/compare/main...stride-praline-2f-ai:contribute/storage-io-growth?expand=1"
+    },
+    {
+      "branch": "contribute/native-metal-presentation",
+      "number": 5,
+      "url": "https://github.com/stride-praline-2f-ai/Henge/pull/5",
+      "sha": "8ba61611eaea796537c0b8c9cac0798db061c762",
+      "base": "contribute/storage-io-growth",
+      "upstream_compare": "https://github.com/Leviidev/Henge/compare/main...stride-praline-2f-ai:contribute/native-metal-presentation?expand=1"
+    },
+    {
+      "branch": "contribute/display-layout",
+      "number": 6,
+      "url": "https://github.com/stride-praline-2f-ai/Henge/pull/6",
+      "sha": "8d184a792ac1a5d0ee8b5c90384f0d914d6dfbe5",
+      "base": "contribute/native-metal-presentation",
+      "upstream_compare": "https://github.com/Leviidev/Henge/compare/main...stride-praline-2f-ai:contribute/display-layout?expand=1"
+    },
+    {
+      "branch": "contribute/native-touch-input",
+      "number": 7,
+      "url": "https://github.com/stride-praline-2f-ai/Henge/pull/7",
+      "sha": "2208562e82e68b8c8eb77a6577639570b044e6c0",
+      "base": "contribute/display-layout",
+      "upstream_compare": "https://github.com/Leviidev/Henge/compare/main...stride-praline-2f-ai:contribute/native-touch-input?expand=1"
+    },
+    {
+      "branch": "contribute/virtual-gamepad",
+      "number": 8,
+      "url": "https://github.com/stride-praline-2f-ai/Henge/pull/8",
+      "sha": "bbd60d5192f6cc4262f63d46e3cf018c0d640c7b",
+      "base": "contribute/native-touch-input",
+      "upstream_compare": "https://github.com/Leviidev/Henge/compare/main...stride-praline-2f-ai:contribute/virtual-gamepad?expand=1"
+    },
+    {
+      "branch": "contribute/henge-link-wireless",
+      "number": 9,
+      "url": "https://github.com/stride-praline-2f-ai/Henge/pull/9",
+      "sha": "83c069cd5d62fe48797452b1edfd9d903db60af1",
+      "base": "contribute/virtual-gamepad",
+      "upstream_compare": "https://github.com/Leviidev/Henge/compare/main...stride-praline-2f-ai:contribute/henge-link-wireless?expand=1"
+    },
+    {
+      "branch": "contribute/clipboard-sharing",
+      "number": 10,
+      "url": "https://github.com/stride-praline-2f-ai/Henge/pull/10",
+      "sha": "690c65a953aae692338b2f8b435a3ec877a8b21b",
+      "base": "contribute/henge-link-wireless",
+      "upstream_compare": "https://github.com/Leviidev/Henge/compare/main...stride-praline-2f-ai:contribute/clipboard-sharing?expand=1"
+    },
+    {
+      "branch": "contribute/device-policy-diagnostics",
+      "number": 11,
+      "url": "https://github.com/stride-praline-2f-ai/Henge/pull/11",
+      "sha": "0968e22c755f01541dc7cc5597c2097404b3a657",
+      "base": "contribute/clipboard-sharing",
+      "upstream_compare": "https://github.com/Leviidev/Henge/compare/main...stride-praline-2f-ai:contribute/device-policy-diagnostics?expand=1"
+    },
+    {
+      "branch": "contribute/app-integration-ui",
+      "number": 12,
+      "url": "https://github.com/stride-praline-2f-ai/Henge/pull/12",
+      "sha": "ca8848876d734f2c6a482dcc66beef68e43e104e",
+      "base": "contribute/device-policy-diagnostics",
+      "upstream_compare": "https://github.com/Leviidev/Henge/compare/main...stride-praline-2f-ai:contribute/app-integration-ui?expand=1"
+    }
+  ],
+  "validation": {
+    "tested_engine_code_sha": "a40441dd378c76c1af9306dfa113b161fa896c7b",
+    "tested_engine_tree": "a19cfd6ae1d1d2f4bb014af5445ba77f2e3fa004",
+    "tested_series_sha": "27284c58997bc0ebc122b2f63a590e5dd1742be4",
+    "tested_series_tree": "2c16f0b5136089b27be690736bbd8351d73203c3",
+    "engine_run": 43724598061,
+    "engine_result": "success",
+    "full_source_run": 43724794272,
+    "full_app_compile": "success; unsigned app compile only, no IPA",
+    "native_result": "strict saved RGBA16Float archive-hit assertion failed at test_pvg_lifecycle.m:118; regular compilation recovered; original assertion retained",
+    "independent_followup_run": 43725203923,
+    "independent_followup": "raw public Metal reproduced render/compute archive misses; all four PSOs executed through checked fallback; input/Link/USB/disk checks passed; sanitizer/concurrency checks passed except missing regular fixture for stats check",
+    "focused_stats_run": 43725962234,
+    "focused_stats_result": "success after building required regular production lifecycle fixture; no test disabled",
+    "hardware_validation": "not performed; M4/Duo performance, iOS17 fallback, Pencil/folding/wireless and physical Metal4/FX require devices",
+    "upstream_submission": "HTTP403 Resource not accessible by integration; browser control unavailable",
+    "merge_ready": false,
+    "IPA_generated": false
+  }
+}

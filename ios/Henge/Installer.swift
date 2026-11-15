@@ -198,6 +198,13 @@ final class Installer: NSObject, ObservableObject {
         let ecid = UInt64.random(in: 1 << 40 ..< 1 << 62)
         var mac = VirtualMac(name: name, ecid: ecid, seed: 0, ramMB: ramMB, diskBytes: 64 << 30)
         (mac.screenWidth, mac.screenHeight) = Device.fittingScreen
+        mac.fitScreen = true
+        M4Performance.applyRetinaDisplay(to: &mac)
+        if HengeLog.deviceModel == "iPhone19,4" {
+            let desktop = Device.desktopRetina(in: Device.displayViewport)
+            mac.desktopLayout = true; mac.retina = true; mac.fitScreen = false
+            (mac.screenWidth, mac.screenHeight) = (desktop.width, desktop.height)
+        }
         let fm = FileManager.default
         try fm.createDirectory(at: mac.directory, withIntermediateDirectories: true)
         Machines.excludeFromBackup(Machines.root)
@@ -272,4 +279,3 @@ final class Installer: NSObject, ObservableObject {
         NSError(domain: "Henge", code: 2, userInfo: [NSLocalizedDescriptionKey: text])
     }
 }
-

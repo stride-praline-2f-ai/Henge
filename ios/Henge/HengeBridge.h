@@ -3,3 +3,8 @@
 #include "Native/henge-tl.h"
 #include "Native/HuskRPPairing.h"
 #include "hvsparse.h"
+#include "../../host/scheduling.h"
+#include "../../host/share.h"
+
+#include "native_touch.h"
+#include "../../devices/pvg_link.h"

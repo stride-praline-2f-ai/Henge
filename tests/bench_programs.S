@@ -48,6 +48,70 @@ PROGRAM bench_mem
     b.ne 3b
 END bench_mem
 
+// Consecutive ordinary loads separated by address increments. This isolates
+// the new planner extension; it does not stand in for macOS/game performance.
+PROGRAM bench_iter_load
+    sub x23, sp, #8192
+    mov x4, #7
+    stp x4, x4, [x23]
+    stp x4, x4, [x23, #16]
+    mov x0, #0
+    movz x2, #0x4, lsl #16
+1:  sub x23, sp, #8192
+    ldr x4, [x23]
+    add x23, x23, #8
+    ldr x6, [x23]
+    add x23, x23, #8
+    ldp x7, x8, [x23]
+    add x0, x0, x4
+    add x0, x0, x6
+    add x0, x0, x7
+    add x0, x0, x8
+    subs x2, x2, #1
+    b.ne 1b
+    mov x5, #0
+END bench_iter_load
+
+// Fixed-base loads with ordinary ALU between them, like object/stack access.
+PROGRAM bench_stream
+    sub x23, sp, #8192
+    mov x4, #7
+    stp x4, x4, [x23]
+    stp x4, x4, [x23, #16]
+    mov x0, #0
+    movz x2, #0x100, lsl #16
+1:  ldr x4, [x23]
+    add x0, x0, x4
+    ldr x5, [x23, #8]
+    add x0, x0, x5
+    ldr x19, [x23, #16]
+    add x0, x0, x19
+    ldr x20, [x23, #24]
+    add x0, x0, x20
+    subs x2, x2, #1
+    b.ne 1b
+    mov x5, #0
+END bench_stream
+
+// Three-field object access: selected reuse must help without a fourth load.
+PROGRAM bench_stream3
+    sub x23, sp, #8192
+    mov x4, #7
+    stp x4, x4, [x23]
+    str x4, [x23, #16]
+    mov x0, #0
+    movz x2, #0x100, lsl #16
+1:  ldr x4, [x23]
+    add x0, x0, x4
+    ldr x5, [x23, #8]
+    add x0, x0, x5
+    ldr x19, [x23, #16]
+    add x0, x0, x19
+    subs x2, x2, #1
+    b.ne 1b
+    mov x5, #0
+END bench_stream3
+
 // An interpreter loop: a jump table and BR, 300000 times.
 PROGRAM bench_dispatch
     adr x10, 7f
@@ -82,4 +146,20 @@ PROGRAM bench_loop
 END bench_loop
 
     .p2align 14 /* whole pages, or the TLB will not map the last one */
+PROGRAM bench_stream2
+    sub x23, sp, #8192
+    mov x4, #7
+    stp x4, x4, [x23]
+    mov x0, #0
+    movz x2, #0x100, lsl #16
+1:  ldr x4, [x23]
+    add x0, x0, x4
+    ldr x5, [x23, #8]
+    add x0, x0, x5
+    subs x2, x2, #1
+    b.ne 1b
+    mov x5, #0
+END bench_stream2
+
+    .p2align 14
 _bench_programs_finish:

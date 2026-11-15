@@ -150,7 +150,7 @@ enum JITBootstrap {
                         + "from the Home Screen and tap Turn On JIT. It also happens "
                         + "inside another container app."
         }
-        HengeLog.log("jit", ok ? "JIT region secured; it will be handed to QEMU later"
+        HengeLog.log("jit", ok ? "JIT region secured; it will be handed to the emulation engine later"
                               : "JIT prewarm FAILED -- StikDebug is not servicing traps")
         return ok
     }

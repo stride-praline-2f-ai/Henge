@@ -1,4 +1,5 @@
 #include "vmapple.h"
+#include "env_flag.h"
 #include "pvg_lite.h"
 #include "sysreg.h"
 
@@ -15,6 +16,10 @@
 #include <sys/mman.h>
 #include <unistd.h>
 #include <time.h>
+#include <TargetConditionals.h>
+#if TARGET_OS_IPHONE
+#include <os/proc.h>
+#endif
 
 #include "timer.h"
 
@@ -205,6 +210,7 @@ uint8_t *hv_vmapple_avp_regs(void *avp) { return avp ? ((AvpRegs *)avp)->regs : 
 struct PrefaultArgs {
     uint8_t *ram;
     uint64_t size;
+    HvVmapple *board;
 };
 
 static void *prefault_thread(void *arg) {
@@ -213,15 +219,33 @@ static void *prefault_thread(void *arg) {
     pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0);
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
-    for (uint64_t off = 0; off < a.size; off += 0x4000) __atomic_fetch_add((volatile uint64_t *)(a.ram + off), 0, __ATOMIC_RELAXED);
+    uint64_t off;
+    for (off = 0; off < a.size; off += 0x4000) {
+        if (atomic_load_explicit(&a.board->prefault_stop, memory_order_relaxed)) break;
+#if TARGET_OS_IPHONE
+        /* Optional eager I/O must not consume the remaining app allowance.
+           The untouched file pages still fault in correctly on demand. */
+        if (!(off & ((16u << 20) - 1)) && os_proc_available_memory() < (256u << 20)) break;
+#endif
+        __atomic_fetch_add((volatile uint64_t *)(a.ram + off), 0, __ATOMIC_RELAXED);
+    }
     clock_gettime(CLOCK_MONOTONIC, &t1);
-    fprintf(stderr, "hengevm: guest RAM file ready in %.1f s\n", (double)(t1.tv_sec - t0.tv_sec) + (double)(t1.tv_nsec - t0.tv_nsec) * 1e-9);
+    fprintf(stderr, "hengevm: guest RAM file prefault %s at %llu/%llu MB in %.1f s; remaining pages stay demand-backed\n", off == a.size ? "completed" : "stopped", (unsigned long long)(off >> 20), (unsigned long long)(a.size >> 20), (double)(t1.tv_sec - t0.tv_sec) + (double)(t1.tv_nsec - t0.tv_nsec) * 1e-9);
     return NULL;
+}
+
+static uint64_t timer_changed(HvMachine *m, HvCpu *cpu) {
+    uint64_t due = hv_timer_update(((HvVmapple *)m->tick_opaque)->gic, cpu);
+    if (m->deadline_kicks_enabled) {
+        __atomic_store_n(&cpu->pc_state->timer_deadline, due, __ATOMIC_RELEASE);
+        __atomic_store_n(&cpu->pc_state->timer_deadline_valid, 1, __ATOMIC_RELEASE);
+    }
+    return due;
 }
 
 static uint64_t tick_locked(HvMachine *m, HvCpu *cpu) {
     HvVmapple *b = m->tick_opaque;
-    uint64_t deadline = hv_timer_update(b->gic, cpu);
+    uint64_t deadline = timer_changed(m, cpu);
     if (cpu->index != 0) return deadline; /* the others only have their own timers to look after */
     hv_pl031_tick(b->rtc);
     if (b->poll) b->poll();
@@ -240,7 +264,7 @@ static uint64_t tick_locked(HvMachine *m, HvCpu *cpu) {
 
 /* Devices and the GIC are shared by the CPUs: one at a time. */
 static uint64_t tick(HvMachine *m, HvCpu *cpu) {
-    if (cpu->index != 0) return hv_timer_update(((HvVmapple *)m->tick_opaque)->gic, cpu); /* its own timer: the GIC's lock only */
+    if (cpu->index != 0) return timer_changed(m, cpu); /* its own timer: the GIC's lock only */
     hv_dev_lock(m);
     uint64_t deadline = tick_locked(m, cpu);
     hv_dev_unlock(m);
@@ -262,9 +286,9 @@ int hv_vmapple_create(HvVmapple *b, HvMachine *m, HvCpu *cpu, uint64_t ram_size,
        The file is unlinked at once and goes away with the process. */
     const char *ram_file = getenv("HV_RAM_FILE");
     b->ram = MAP_FAILED;
-    if (!getenv("HV_RAM_NO_LEDGER")) {
+    if (!hv_env_flag("HV_RAM_NO_LEDGER")) {
         uint8_t *free_of_footprint = alloc_no_footprint(ram_size);
-        if (free_of_footprint) b->ram = free_of_footprint;
+        if (free_of_footprint) { b->ram = free_of_footprint; b->ram_backing = HV_RAM_LEDGER; }
     }
     if (b->ram == MAP_FAILED && ram_file && *ram_file) {
         int fd = open(ram_file, O_RDWR | O_CREAT | O_TRUNC, 0600);
@@ -272,21 +296,29 @@ int hv_vmapple_create(HvVmapple *b, HvMachine *m, HvCpu *cpu, uint64_t ram_size,
             unlink(ram_file);
             if (ftruncate(fd, (off_t)ram_size) == 0)
                 b->ram = mmap(NULL, ram_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-            if (b->ram != MAP_FAILED) b->ram_fd = fd; /* the balloon punches holes in it */
+            if (b->ram != MAP_FAILED) { b->ram_fd = fd; b->ram_backing = HV_RAM_FILE; } /* the balloon punches holes in it */
             else close(fd);
         }
         if (b->ram == MAP_FAILED) fprintf(stderr, "hengevm: guest RAM file %s failed: %s; using anonymous memory\n", ram_file, strerror(errno));
         else {
             fprintf(stderr, "hengevm: guest RAM (%llu MB) is backed by a file\n", (unsigned long long)(ram_size >> 20));
-            if (!getenv("HV_RAM_NO_PREFAULT")) {
+            if (!hv_env_flag("HV_RAM_NO_PREFAULT")) {
                 struct PrefaultArgs *a = malloc(sizeof *a);
-                a->ram = b->ram, a->size = ram_size;
-                if (pthread_create(&b->prefault_thread, NULL, prefault_thread, a) == 0) b->prefault_started = 1;
-                else free(a);
+                if (a) {
+                    a->ram = b->ram, a->size = ram_size, a->board = b;
+                    if (pthread_create(&b->prefault_thread, NULL, prefault_thread, a) == 0) b->prefault_started = 1;
+                    else free(a);
+                }
             }
         }
     }
-    if (b->ram == MAP_FAILED) b->ram = mmap(NULL, ram_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    if (b->ram == MAP_FAILED) {
+        b->ram = mmap(NULL, ram_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+        if (b->ram != MAP_FAILED) {
+            b->ram_backing = HV_RAM_ANONYMOUS;
+            fprintf(stderr, "hengevm: guest RAM (%llu MB) uses anonymous memory; footprint exclusion and file backing unavailable\n", (unsigned long long)(ram_size >> 20));
+        }
+    }
     if (b->ram == MAP_FAILED) return -1;
     b->rom = mmap(NULL, ROM_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
     if (b->rom == MAP_FAILED) return -1;
@@ -333,6 +365,8 @@ int hv_vmapple_create(HvVmapple *b, HvMachine *m, HvCpu *cpu, uint64_t ram_size,
     }
 
     m->tick = tick;
+    const char *direct_timer = getenv("HV_TIMER_DIRECT");
+    m->timer_changed = !direct_timer || strcmp(direct_timer, "0") ? timer_changed : NULL;
     m->tick_opaque = b;
     cpu->m = m;
     return 0;
@@ -349,6 +383,7 @@ int hv_vmapple_load_rom(HvVmapple *b, const char *path) {
 
 void hv_vmapple_reset_cpu(HvVmapple *b) {
     b->m->cntvoff = hv_counter();
+    fprintf(stderr,"henge: virtual-counter: machine origin=%llu; virtual uptime starts near zero; physical counter unchanged\n", (unsigned long long)b->m->cntvoff);
     for (int i = 0; i < b->ncpus; i++) {
         HvCpu *c = &b->cpu[i];
         hv_cpu_reset_index(c, b->m, (uint32_t)i);
@@ -359,6 +394,7 @@ void hv_vmapple_reset_cpu(HvVmapple *b) {
 }
 
 void hv_vmapple_destroy(HvVmapple *b) {
+    atomic_store_explicit(&b->prefault_stop, 1, memory_order_relaxed);
     if (b->prefault_started) pthread_join(b->prefault_thread, NULL);
     /* Device workers and GPU completions can still touch RAM and the GIC. */
     hv_virtio_blk_destroy(b->root_blk);

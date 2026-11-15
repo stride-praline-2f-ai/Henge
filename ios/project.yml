@@ -35,6 +35,9 @@ targets:
           - "AppIcon.icon"
       - path: Henge/Resources
         buildPhase: resources
+      # Xcode compiles native display shaders into default.metallib for the device.
+      - path: ../devices/pvg_screen.metal
+        buildPhase: sources
       # Icon Composer's document: the app icon, which iOS renders in Liquid Glass.
       - path: Henge/AppIcon.icon
         type: file
@@ -84,6 +87,8 @@ targets:
           - "-lhusk_rppairing"
           - "-framework"
           - "Metal"
+          - "-weak_framework"
+          - "MetalFX"
           - "-framework"
           - "IOSurface"
           - "-framework"
@@ -93,13 +98,21 @@ targets:
           - "-framework"
           - "CoreFoundation"
           - "-framework"
+          - "VideoToolbox"
+          - "-framework"
+          - "CoreMedia"
+          - "-framework"
+          - "CoreVideo"
+          - "-framework"
+          - "Network"
+          - "-framework"
+          - "Security"
+          - "-framework"
           - "QuartzCore"
           - "-framework"
           - "CoreText"
           - "-framework"
           - "ImageIO"
-          - "-framework"
-          - "CoreVideo"
           - "-framework"
           - "UniformTypeIdentifiers"
     dependencies:
@@ -110,15 +123,18 @@ targets:
         script: |
           set -e
           cd "$SRCROOT/.."
-          make ios-lib build/henge-agent.gz build/tl-samples.dmg
+          make ios-lib build/henge-agent.gz build/tl-samples.dmg build/henge-touch-agent.tar.gz
           ./tools/build_ios_restore.sh
+          python3 tools/build_pipeline_bundle.py --out build/ios/pipeline-bundle
         basedOnDependencyAnalysis: false
     postBuildScripts:
       - name: Bundle the Mac helper
         # What runs inside macOS for the clipboard and shared folder (tools/henge-agent.m).
         script: |
           set -e
-          cp "$SRCROOT/../build/henge-agent.gz" "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/henge-agent.gz"
+          mkdir -p "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/HengePipelines"
+          cp "$SRCROOT/../build/ios/pipeline-bundle/"*.mtl4a "$SRCROOT/../build/ios/pipeline-bundle/index.json" "$SRCROOT/../build/ios/pipeline-bundle/screen.metallib" "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/HengePipelines/"
+          cp "$SRCROOT/../build/henge-agent.gz" "$SRCROOT/../build/henge-touch-agent.tar.gz" "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/"
           rm -f "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/tl-samples.dmg"
           cp -X "$SRCROOT/../build/tl-samples.dmg" "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/tl-samples.dmg"
         basedOnDependencyAnalysis: false
